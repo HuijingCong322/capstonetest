@@ -1,0 +1,7 @@
+appl_id,filing_date,appl_status_desc,public_indicator,extra_column
+12/000001,2018-01-05,Patented Case,Y,ignored
+12/000002,2018-02-06,Abandoned -- Failure to Respond,Y,ignored
+12/000003,2019-03-07,Application Undergoing Examination,Y,ignored
+12/000004,2019-04-08,Application Undergoing Examination,Y,ignored
+12/000005,2020-05-09,Application Undergoing Examination,Y,ignored
+12/000006,2020-06-10,Application Undergoing Examination,Y,ignored

@@ -1,0 +1,44 @@
+{
+  "aliases": {
+    "application_data": {
+      "application_number": ["application_number", "appl_id"],
+      "filing_date": ["filing_date"],
+      "status": ["status", "appl_status_desc"],
+      "public_indicator": ["public_indicator"]
+    },
+    "transactions": {
+      "application_number": ["application_number", "appl_id"],
+      "event_code": ["event_code"],
+      "event_date": ["event_date"],
+      "event_description": ["event_description"]
+    },
+    "cms_documents": {
+      "application_number": ["application_number", "appl_id"],
+      "document_id": ["document_id", "document_identifier"],
+      "document_code": ["document_code"],
+      "document_date": ["document_date", "document_filing_date"]
+    },
+    "cms_document_codes": {
+      "document_code": ["document_code"],
+      "document_description": ["document_description"]
+    },
+    "continuity_parents": {
+      "application_number": ["application_number", "appl_id"],
+      "parent_application_number": ["parent_application_number", "parent_appl_id"]
+    },
+    "continuity_children": {
+      "application_number": ["application_number", "appl_id"],
+      "child_application_number": ["child_application_number", "child_appl_id"]
+    }
+  },
+  "document_categories": {
+    "office_action": ["CTNF", "CTFR"],
+    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND"],
+    "next_examination_event": ["CTNF", "CTFR", "NOA", "ABN"]
+  },
+  "transaction_categories": {
+    "office_action": ["CTNF", "CTFR"],
+    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND"],
+    "terminal_abandonment": ["ABN"]
+  }
+}

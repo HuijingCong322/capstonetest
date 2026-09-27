@@ -1,0 +1,8 @@
+appl_id,event_code,event_date,event_description
+12/000001,CTNF,2019-01-01,Non Final Action Mailed
+12/000001,RESP,2019-03-01,Response to Non-Final Office Action
+12/000002,CTFR,2019-04-01,Final Rejection Mailed
+12/000003,CTNF,2020-01-01,Non Final Action Mailed
+12/000004,MISC,2020-02-01,Unrelated event
+12/000005,CTNF,2021-01-01,Non Final Action Mailed
+12/000006,CTNF,2021-02-01,Non Final Action Mailed
