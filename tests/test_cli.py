@@ -172,6 +172,7 @@ def test_end_to_end_fixture_run_writes_all_outputs_and_is_rerunnable(tmp_path: P
         encoding="utf-8"
     )
     report = json.loads(report_text)
+    odp_manifest = list(read_jsonl(output_root / "manifests" / "odp_documents.jsonl"))
 
     assert len(timelines) == 3
     assert len(parquet) == 3
@@ -180,4 +181,10 @@ def test_end_to_end_fixture_run_writes_all_outputs_and_is_rerunnable(tmp_path: P
     assert report["sampling"]["selected_applications"] == 3
     assert report["downloads"]["extracted"] == 6
     assert report["eligibility"]["generation_eligible"] == 3
+    assert len(odp_manifest) == 6
+    assert all(row["acquisition_status"] == "downloaded" for row in odp_manifest)
+    assert all(row["acquired_sha256"] for row in odp_manifest)
+    assert all(row["local_path"] for row in odp_manifest)
+    assert all(row["acquired_byte_length"] == len(payload) for row in odp_manifest)
+    assert all(row["retrieved_at"] for row in odp_manifest)
     assert "test-secret" not in report_text

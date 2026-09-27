@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote
@@ -13,6 +14,7 @@ import time
 import httpx
 
 from .schemas import DocumentRecord, normalize_application_number
+from .patex import load_patex_mapping
 from .storage import StateStore, StoredFile, safe_document_path, store_download
 
 
@@ -45,6 +47,7 @@ class OdpSettings:
     backoff_base_seconds: float = 0.5
     max_backoff_seconds: float = 30.0
     fail_fast: bool = False
+    requests_per_minute: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -54,18 +57,14 @@ class FetchSummary:
     downloaded: int = 0
     reused: int = 0
     failed: int = 0
+    listing_failed: int = 0
+    failure_categories: Mapping[str, int] = field(default_factory=dict)
 
 
-_DOCUMENT_CODE_CATEGORIES = {
-    "CTNF": "office_action",
-    "CTFR": "office_action",
-    "RESP": "applicant_response",
-    "A.NE": "applicant_response",
-    "A.AF": "applicant_response",
-    "AMND": "applicant_response",
-    "NOA": "next_examination_event",
-    "ABN": "next_examination_event",
-}
+_DOCUMENT_CODE_CATEGORIES: dict[str, str] = {}
+for _category, _codes in load_patex_mapping()["document_categories"].items():
+    for _code in _codes:
+        _DOCUMENT_CODE_CATEGORIES.setdefault(_code, _category)
 
 
 class OdpClient:
@@ -76,6 +75,7 @@ class OdpClient:
         *,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random_module.random,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if not settings.api_key:
             raise AuthenticationError("USPTO_API_KEY is required for live ODP access")
@@ -83,6 +83,8 @@ class OdpClient:
         self.settings = settings
         self.sleep = sleep
         self.jitter = jitter
+        self.monotonic = monotonic
+        self._last_request_at: float | None = None
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -123,6 +125,7 @@ class OdpClient:
     ) -> httpx.Response:
         last_error: Exception | None = None
         for attempt in range(self.settings.max_retries + 1):
+            self._pace()
             try:
                 request = self.http_client.build_request(
                     method,
@@ -153,6 +156,15 @@ class OdpClient:
             response.raise_for_status()
             return response
         raise RetryExhausted("ODP retries exhausted") from last_error
+
+    def _pace(self) -> None:
+        now = self.monotonic()
+        if self.settings.requests_per_minute > 0 and self._last_request_at is not None:
+            interval = 60.0 / self.settings.requests_per_minute
+            remaining = interval - (now - self._last_request_at)
+            if remaining > 0:
+                self.sleep(remaining)
+        self._last_request_at = now
 
     def _backoff(self, attempt: int, retry_after: str | None) -> float:
         if retry_after:
@@ -219,13 +231,21 @@ class OdpClient:
                 document_id=quote(record.document_id, safe=""),
             )
             url = f"{self.settings.base_url.rstrip('/')}{path}"
-        response = self._request("GET", url, stream=True)
-        try:
-            return store_download(
-                response.iter_bytes(), destination, expected_size=record.expected_size
-            )
-        finally:
-            response.close()
+        last_error: Exception | None = None
+        for attempt in range(self.settings.max_retries + 1):
+            response = self._request("GET", url, stream=True)
+            try:
+                return store_download(
+                    response.iter_bytes(), destination, expected_size=record.expected_size
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error = exc
+                if attempt >= self.settings.max_retries:
+                    raise RetryExhausted("ODP download stream retries exhausted") from exc
+                self.sleep(self._backoff(attempt, None))
+            finally:
+                response.close()
+        raise RetryExhausted("ODP download stream retries exhausted") from last_error
 
 
 def fetch_manifest(
@@ -233,18 +253,26 @@ def fetch_manifest(
     application_numbers: Iterable[str],
     state_store: StateStore,
 ) -> FetchSummary:
-    applications = discovered = downloaded = reused = failed = 0
+    applications = discovered = downloaded = reused = failed = listing_failed = 0
+    failure_categories: Counter[str] = Counter()
     for application_number in application_numbers:
         applications += 1
         try:
             documents = client.list_documents(application_number)
-        except Exception:
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            listing_failed += 1
+            failure_categories[type(exc).__name__] += 1
             if client.settings.fail_fast:
                 raise
             continue
         discovered += len(documents)
         for record in documents:
             state_store.upsert_document(record)
+            if state_store.stored_file_is_valid(record.document_id):
+                reused += 1
+                continue
             try:
                 stored = client.download_document(record)
                 state_store.record_attempt(record.document_id, outcome="downloaded")
@@ -253,16 +281,22 @@ def fetch_manifest(
                     "downloaded",
                     sha256=stored.sha256,
                     path=stored.path,
+                    byte_length=stored.byte_length,
+                    retrieved_at=datetime.now(timezone.utc).isoformat(),
                 )
                 if stored.reused:
                     reused += 1
                 else:
                     downloaded += 1
+            except AuthenticationError:
+                raise
             except Exception as exc:
                 failed += 1
+                failure_categories[type(exc).__name__] += 1
                 state_store.record_attempt(
                     record.document_id,
                     outcome="failed",
+                    error_category=type(exc).__name__,
                     error=str(exc),
                     secret_values=(client.settings.api_key or "",),
                 )
@@ -273,7 +307,10 @@ def fetch_manifest(
                 )
                 if client.settings.fail_fast:
                     raise
-    return FetchSummary(applications, discovered, downloaded, reused, failed)
+    return FetchSummary(
+        applications, discovered, downloaded, reused, failed, listing_failed,
+        dict(sorted(failure_categories.items())),
+    )
 
 
 def _integer(value: object) -> int | None:

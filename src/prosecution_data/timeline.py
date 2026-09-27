@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Iterable, Mapping
 
+from .patex import load_patex_mapping
 from .schemas import (
     ApplicationRecord,
     DocumentRecord,
@@ -25,14 +26,9 @@ class TimelineSettings:
 
 
 _TRANSACTION_CATEGORIES = {
-    "CTNF": "office_action",
-    "CTFR": "office_action",
-    "RESP": "applicant_response",
-    "A.NE": "applicant_response",
-    "A.AF": "applicant_response",
-    "AMND": "applicant_response",
-    "NOA": "next_examination_event",
-    "ABN": "terminal_abandonment",
+    code: category
+    for category, codes in load_patex_mapping()["transaction_categories"].items()
+    for code in codes
 }
 
 
@@ -183,18 +179,18 @@ def _next_within(
         delta = (event["date"] - origin_date).days
         if delta > max_days:
             return None
-        if delta >= 0 and event["category"] in categories:
+        if delta > 0 and event["category"] in categories:
             return event
     return None
 
 
 def _has_next_event_after_response(events: list[dict[str, Any]]) -> bool:
-    response_seen = False
+    response_date: date | None = None
     for event in events:
         if event["category"] == "applicant_response":
-            response_seen = True
+            response_date = event["date"]
             continue
-        if response_seen and event["category"] in {
+        if response_date is not None and event["date"] > response_date and event["category"] in {
             "office_action",
             "next_examination_event",
             "terminal_abandonment",

@@ -22,7 +22,11 @@ def test_report_summarizes_sampling_download_extraction_and_eligibility() -> Non
         sampling_counters={"application_rows": 6, "selected_applications": 1},
         applications=[application],
         documents=[document],
-        document_states=[{"status": "downloaded"}],
+        document_states=[{"document_id": "DOC-1", "status": "downloaded"}],
+        attempts=[
+            {"outcome": "failed", "error_category": "ReadTimeout"},
+            {"outcome": "downloaded", "error_category": None},
+        ],
         extracted_texts=[extracted],
         timelines=[timeline],
     )
@@ -32,6 +36,11 @@ def test_report_summarizes_sampling_download_extraction_and_eligibility() -> Non
     assert report["document_codes"] == {"XYZ": 1}
     assert report["unknown_document_codes"] == 1
     assert report["downloads"] == {"downloaded": 1}
+    assert report["attempt_outcomes"] == {"downloaded": 1, "failed": 1}
+    assert report["failure_categories"] == {"ReadTimeout": 1}
+    assert report["missingness_by_document_type_and_outcome"] == {
+        "other": {"pending": {"downloaded": 1}}
+    }
     assert report["extraction_methods"] == {"native_pdf": 1}
     assert report["eligibility"] == {
         "generation_eligible": 1,

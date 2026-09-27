@@ -110,6 +110,23 @@ def test_candidate_links_never_cross_applications() -> None:
     assert timeline.candidate_links == ()
 
 
+def test_same_day_events_are_ambiguous_and_not_chronologically_linked() -> None:
+    same_day = date(2020, 1, 1)
+    timeline = build_timeline(
+        application(),
+        [
+            document("OA-1", "office_action", same_day),
+            document("RESP-1", "applicant_response", same_day),
+        ],
+        [TransactionEvent("12000001", "N/=", same_day, source_identifier="TX-NOA")],
+        [],
+        TimelineSettings(),
+    )
+
+    assert timeline.candidate_links == ()
+    assert all(event["same_date_ambiguous"] for event in timeline.events)
+
+
 def test_undated_events_are_kept_separate() -> None:
     timeline = build_timeline(
         application(),

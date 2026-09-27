@@ -257,15 +257,22 @@ def test_download_size_mismatch_cleans_temporary_file(tmp_path: Path) -> None:
     assert not list(raw.glob("*.tmp"))
 
 
-def test_interrupted_download_cleans_temporary_file(tmp_path: Path) -> None:
+def test_interrupted_download_retries_full_stream(tmp_path: Path) -> None:
     class BrokenStream(httpx.SyncByteStream):
         def __iter__(self):
             yield b"partial"
             raise httpx.ReadError("connection lost")
 
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(200, request=request, stream=BrokenStream())
-    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, request=request, stream=BrokenStream())
+        return httpx.Response(200, request=request, content=b"complete")
+
+    transport = httpx.MockTransport(handler)
     record = DocumentRecord(
         application_number="12000001",
         document_id="DOC-1",
@@ -276,12 +283,16 @@ def test_interrupted_download_cleans_temporary_file(tmp_path: Path) -> None:
     )
 
     with httpx.Client(transport=transport) as http_client:
-        client = OdpClient(http_client, OdpSettings(api_key="key", output_root=tmp_path))
-        with pytest.raises(httpx.ReadError):
-            client.download_document(record)
+        client = OdpClient(
+            http_client,
+            OdpSettings(api_key="key", output_root=tmp_path, max_retries=1),
+            sleep=lambda seconds: None,
+        )
+        stored = client.download_document(record)
 
     raw = tmp_path / "raw" / "odp" / "12000001"
-    assert not (raw / "DOC-1.pdf").exists()
+    assert stored.path.read_bytes() == b"complete"
+    assert calls == 2
     assert not list(raw.glob("*.tmp"))
 
 
@@ -302,3 +313,78 @@ def test_fetch_manifest_continues_after_document_download_failure(tmp_path: Path
     assert summary.applications == 1
     assert summary.discovered == 1
     assert summary.failed == 1
+
+
+def test_fetch_manifest_propagates_authentication_failure(tmp_path: Path) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(401, request=request)
+    )
+    with httpx.Client(transport=transport) as http_client:
+        client = OdpClient(http_client, OdpSettings(api_key="bad", output_root=tmp_path))
+        with StateStore(tmp_path / "state.sqlite3") as state:
+            with pytest.raises(AuthenticationError):
+                fetch_manifest(client, ["12000001"], state)
+
+
+def test_fetch_manifest_reports_listing_failure(tmp_path: Path) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(500, request=request)
+    )
+    with httpx.Client(transport=transport) as http_client:
+        client = OdpClient(
+            http_client,
+            OdpSettings(api_key="key", output_root=tmp_path, max_retries=0),
+        )
+        with StateStore(tmp_path / "state.sqlite3") as state:
+            summary = fetch_manifest(client, ["12000001"], state)
+
+    assert summary.listing_failed == 1
+    assert summary.failure_categories == {"RetryExhausted": 1}
+
+
+def test_fetch_manifest_rerun_reuses_verified_file_and_preserves_extracted_state(
+    tmp_path: Path,
+) -> None:
+    payload = fixture_payload("documents_page_1.json")
+    download_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal download_calls
+        if request.url.path.endswith("/documents"):
+            return httpx.Response(200, request=request, json=payload)
+        download_calls += 1
+        return httpx.Response(200, request=request, content=b"pdf-payload!")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = OdpClient(http_client, OdpSettings(api_key="key", output_root=tmp_path))
+        with StateStore(tmp_path / "state.sqlite3") as state:
+            first = fetch_manifest(client, ["12000001"], state)
+            state.set_document_status("ODP-DOC-1", "extracted")
+            second = fetch_manifest(client, ["12000001"], state)
+            row = state.get_document("ODP-DOC-1")
+
+    assert first.downloaded == 1
+    assert second.reused == 1
+    assert download_calls == 1
+    assert row["status"] == "extracted"
+    assert row["byte_length"] == 12
+    assert row["retrieved_at"]
+
+
+def test_request_pacing_applies_configured_rate(tmp_path: Path) -> None:
+    sleeps: list[float] = []
+    times = iter([0.0, 0.0])
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, request=request, json=fixture_payload("documents_page_1.json"))
+    )
+    with httpx.Client(transport=transport) as http_client:
+        client = OdpClient(
+            http_client,
+            OdpSettings(api_key="key", output_root=tmp_path, requests_per_minute=30),
+            sleep=sleeps.append,
+            monotonic=lambda: next(times),
+        )
+        client.list_documents("12000001")
+        client.list_documents("12000001")
+
+    assert sleeps == [2.0]

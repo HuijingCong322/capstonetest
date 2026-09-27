@@ -80,6 +80,7 @@ def test_attempt_storage_redacts_secrets_and_authorization_headers(tmp_path: Pat
         store.record_attempt(
             "DOC-1",
             outcome="failed",
+            error_category="AuthenticationError",
             error=f"request failed with {secret}",
             headers={"Authorization": f"Bearer {secret}", "X-API-KEY": secret, "Retry-After": "2"},
             secret_values=(secret,),
@@ -92,6 +93,7 @@ def test_attempt_storage_redacts_secrets_and_authorization_headers(tmp_path: Pat
     assert "X-API-KEY" not in rendered
     assert attempt["error"] == "request failed with [REDACTED]"
     assert attempt["headers"] == {"Retry-After": "2"}
+    assert attempt["error_category"] == "AuthenticationError"
 
 
 def test_atomic_download_writes_hash_and_reuses_matching_file(tmp_path: Path) -> None:

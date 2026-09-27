@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -99,42 +100,29 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
         "unknown_document_codes": 0,
     }
 
-    applications_frame = _read_table(
-        inputs.application_data, "application_data", options.chunksize, mapping
-    )
-    transactions_frame = _read_table(
-        inputs.transactions, "transactions", options.chunksize, mapping
-    )
-    documents_frame = _read_table(
-        inputs.cms_documents, "cms_documents", options.chunksize, mapping
-    )
-
     applications: dict[str, dict[str, Any]] = {}
-    for row in applications_frame.to_dict(orient="records"):
-        counters["application_rows"] += 1
-        try:
-            application_number = normalize_application_number(row["application_number"])
-        except IdentifierError:
-            counters["invalid_application_identifiers"] += 1
-            continue
-        if str(row.get("public_indicator", "")).strip().lower() not in {
-            "y",
-            "yes",
-            "true",
-            "1",
-            "public",
-        }:
-            counters["non_public_applications"] += 1
-            continue
-        filing_date = _parse_date(row.get("filing_date"))
-        if options.date_from and (filing_date is None or filing_date < options.date_from):
-            continue
-        if options.date_to and (filing_date is None or filing_date > options.date_to):
-            continue
-        applications[application_number] = {
-            "filing_date": filing_date,
-            "status": _normalize_status(row.get("status")),
-        }
+    for frame in _iter_table(inputs.application_data, "application_data", options.chunksize, mapping):
+        for row in frame.to_dict(orient="records"):
+            counters["application_rows"] += 1
+            try:
+                application_number = normalize_application_number(row["application_number"])
+            except IdentifierError:
+                counters["invalid_application_identifiers"] += 1
+                continue
+            if str(row.get("public_indicator", "")).strip().lower() not in {
+                "y", "yes", "true", "1", "public",
+            }:
+                counters["non_public_applications"] += 1
+                continue
+            filing_date = _parse_date(row.get("filing_date"))
+            if options.date_from and (filing_date is None or filing_date < options.date_from):
+                continue
+            if options.date_to and (filing_date is None or filing_date > options.date_to):
+                continue
+            applications[application_number] = {
+                "filing_date": filing_date,
+                "status": _normalize_status(row.get("status")),
+            }
 
     document_categories = mapping["document_categories"]
     transaction_categories = mapping["transaction_categories"]
@@ -143,53 +131,30 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
     transaction_office_actions = set(transaction_categories["office_action"])
     transaction_responses = set(transaction_categories["applicant_response"])
 
-    normalized_documents: list[DocumentRecord] = []
     office_action_applications: set[str] = set()
     response_applications: set[str] = set()
-    for row in documents_frame.to_dict(orient="records"):
-        try:
-            application_number = normalize_application_number(row["application_number"])
-        except IdentifierError:
-            continue
-        code = str(row.get("document_code", "")).strip().upper()
-        category = _document_category(code, document_categories)
-        if category == "other":
-            counters["unknown_document_codes"] += 1
-        if code in office_action_codes:
-            office_action_applications.add(application_number)
-        if code in response_codes:
-            response_applications.add(application_number)
-        document_id = str(row.get("document_id", "")).strip()
-        normalized_documents.append(
-            DocumentRecord(
-                application_number=application_number,
-                document_id=document_id,
-                document_code=code,
-                document_category=category,
-                recorded_date=_parse_date(row.get("document_date")),
-                source_identifier=document_id,
-            )
-        )
-
-    normalized_transactions: list[TransactionEvent] = []
-    for row in transactions_frame.to_dict(orient="records"):
-        try:
-            application_number = normalize_application_number(row["application_number"])
-        except IdentifierError:
-            continue
-        code = str(row.get("event_code", "")).strip().upper()
-        if code in transaction_office_actions:
-            office_action_applications.add(application_number)
-        if code in transaction_responses:
-            response_applications.add(application_number)
-        normalized_transactions.append(
-            TransactionEvent(
-                application_number=application_number,
-                event_code=code,
-                event_date=_parse_date(row.get("event_date")),
-                description=_optional_string(row.get("event_description")),
-            )
-        )
+    for frame in _iter_table(inputs.cms_documents, "cms_documents", options.chunksize, mapping):
+        for row in frame.to_dict(orient="records"):
+            try:
+                application_number = normalize_application_number(row["application_number"])
+            except IdentifierError:
+                continue
+            code = str(row.get("document_code", "")).strip().upper()
+            if code in office_action_codes:
+                office_action_applications.add(application_number)
+            if code in response_codes:
+                response_applications.add(application_number)
+    for frame in _iter_table(inputs.transactions, "transactions", options.chunksize, mapping):
+        for row in frame.to_dict(orient="records"):
+            try:
+                application_number = normalize_application_number(row["application_number"])
+            except IdentifierError:
+                continue
+            code = str(row.get("event_code", "")).strip().upper()
+            if code in transaction_office_actions:
+                office_action_applications.add(application_number)
+            if code in transaction_responses:
+                response_applications.add(application_number)
 
     eligible_numbers = sorted(set(applications) & office_action_applications)
     counters["without_office_action"] = len(applications) - len(eligible_numbers)
@@ -221,6 +186,69 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
         )
         for number in eligible_numbers
     )
+    normalized_documents: list[DocumentRecord] = []
+    document_occurrences: dict[str, int] = {}
+    for frame in _iter_table(inputs.cms_documents, "cms_documents", options.chunksize, mapping):
+        for row in frame.to_dict(orient="records"):
+            try:
+                application_number = normalize_application_number(row["application_number"])
+            except IdentifierError:
+                continue
+            if application_number not in selected:
+                continue
+            code = str(row.get("document_code", "")).strip().upper()
+            category = _document_category(code, document_categories)
+            if category == "other":
+                counters["unknown_document_codes"] += 1
+            signature = _stable_identifier(
+                "patex-doc",
+                application_number,
+                row.get("document_date"),
+                code,
+                row.get("number_of_pages"),
+            )
+            document_occurrences[signature] = document_occurrences.get(signature, 0) + 1
+            synthetic_id = f"{signature}:{document_occurrences[signature]}"
+            normalized_documents.append(
+                DocumentRecord(
+                    application_number=application_number,
+                    document_id=synthetic_id,
+                    document_code=code,
+                    document_category=category,
+                    recorded_date=_parse_date(row.get("document_date")),
+                    source_identifier=synthetic_id,
+                    metadata={
+                        "identifier_kind": "synthetic_patex_event",
+                        "source_document_id": _optional_string(row.get("document_id")),
+                        "number_of_pages": _optional_string(row.get("number_of_pages")),
+                    },
+                )
+            )
+    normalized_transactions: list[TransactionEvent] = []
+    transaction_occurrences: dict[str, int] = {}
+    for frame in _iter_table(inputs.transactions, "transactions", options.chunksize, mapping):
+        for row in frame.to_dict(orient="records"):
+            try:
+                application_number = normalize_application_number(row["application_number"])
+            except IdentifierError:
+                continue
+            if application_number not in selected:
+                continue
+            code = str(row.get("event_code", "")).strip().upper()
+            signature = _stable_identifier(
+                "patex-tx", application_number, row.get("event_date"), code,
+                row.get("event_description"),
+            )
+            transaction_occurrences[signature] = transaction_occurrences.get(signature, 0) + 1
+            normalized_transactions.append(
+                TransactionEvent(
+                    application_number=application_number,
+                    event_code=code,
+                    event_date=_parse_date(row.get("event_date")),
+                    description=_optional_string(row.get("event_description")),
+                    source_identifier=f"{signature}:{transaction_occurrences[signature]}",
+                )
+            )
     documents = tuple(
         sorted(
             (record for record in normalized_documents if record.application_number in selected),
@@ -230,24 +258,37 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
     transactions = tuple(
         sorted(
             (record for record in normalized_transactions if record.application_number in selected),
-            key=lambda record: (record.application_number, record.event_date or date.max, record.event_code),
+            key=lambda record: (
+                record.application_number,
+                record.event_date or date.max,
+                record.event_code,
+                record.source_identifier,
+            ),
         )
     )
     return ManifestBundle(application_records, documents, transactions, counters)
 
 
-def _read_table(
+def _iter_table(
     path: Path, name: str, chunksize: int, mapping: Mapping[str, Any]
-) -> pd.DataFrame:
-    pieces: list[pd.DataFrame] = []
+) -> Iterable[pd.DataFrame]:
     aliases = mapping["aliases"][name]
+    optional = mapping.get("optional_aliases", {}).get(name, {})
     for chunk in pd.read_csv(path, dtype=str, keep_default_na=False, chunksize=chunksize):
         resolved = resolve_columns(chunk.columns, aliases)
-        renamed = chunk.rename(columns={source: canonical for canonical, source in resolved.items()})
-        pieces.append(renamed[list(aliases)])
-    if not pieces:
-        return pd.DataFrame(columns=list(aliases))
-    return pd.concat(pieces, ignore_index=True)
+        optional_resolved = resolve_columns(chunk.columns, optional)
+        renamed = chunk.rename(
+            columns={source: canonical for canonical, source in {**resolved, **optional_resolved}.items()}
+        )
+        for canonical in optional:
+            if canonical not in renamed:
+                renamed[canonical] = ""
+        yield renamed[list(aliases) + list(optional)]
+
+
+def _stable_identifier(prefix: str, *values: object) -> str:
+    canonical = json.dumps([str(value).strip() for value in values], separators=(",", ":"))
+    return f"{prefix}:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
 
 
 def _parse_date(value: object) -> date | None:
@@ -288,14 +329,14 @@ class _UnionFind:
         self.parent = {value: value for value in values}
 
     def find(self, value: str) -> str:
+        if value not in self.parent:
+            self.parent[value] = value
         parent = self.parent[value]
         if parent != value:
             self.parent[value] = self.find(parent)
         return self.parent[value]
 
     def union(self, left: str, right: str) -> None:
-        if left not in self.parent or right not in self.parent:
-            return
         left_root, right_root = self.find(left), self.find(right)
         if left_root != right_root:
             smaller, larger = sorted((left_root, right_root))
@@ -324,15 +365,14 @@ def _families(
     for path, name, relative_column in table_specs:
         if path is None:
             continue
-        frame = _read_table(path, name, chunksize, mapping)
-        for row in frame.to_dict(orient="records"):
-            try:
-                application = normalize_application_number(row["application_number"])
-                relative = normalize_application_number(row[relative_column])
-            except IdentifierError:
-                continue
-            union_find.union(application, relative)
-            if application in union_find.parent and relative in union_find.parent:
+        for frame in _iter_table(path, name, chunksize, mapping):
+            for row in frame.to_dict(orient="records"):
+                try:
+                    application = normalize_application_number(row["application_number"])
+                    relative = normalize_application_number(row[relative_column])
+                except IdentifierError:
+                    continue
+                union_find.union(application, relative)
                 linked.update((application, relative))
 
     groups: dict[str, list[str]] = {}

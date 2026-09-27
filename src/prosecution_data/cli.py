@@ -163,6 +163,7 @@ def _run_fetch(
         timeout_seconds=config.timeout_seconds,
         max_retries=config.max_retries,
         fail_fast=config.fail_fast,
+        requests_per_minute=config.requests_per_minute,
     )
     state_path = config.output_root / "state" / "prosecution_data.sqlite3"
     try:
@@ -176,10 +177,20 @@ def _run_fetch(
         return 2
     write_jsonl(
         config.output_root / "manifests" / "odp_documents.jsonl",
-        (row["payload"] for row in state_rows),
+        (
+            {
+                **row["payload"],
+                "acquisition_status": row["status"],
+                "acquired_sha256": row["sha256"],
+                "local_path": row["path"],
+                "acquired_byte_length": row["byte_length"],
+                "retrieved_at": row["retrieved_at"],
+            }
+            for row in state_rows
+        ),
     )
     print(json.dumps(to_json_dict(summary), sort_keys=True))
-    return 0 if summary.failed == 0 else 1
+    return 0 if summary.failed == 0 and summary.listing_failed == 0 else 1
 
 
 def _run_extract(args: argparse.Namespace, config: AppConfig) -> int:
@@ -260,11 +271,13 @@ def _run_build_timeline(args: argparse.Namespace, config: AppConfig) -> int:
     state_path = config.output_root / "state" / "prosecution_data.sqlite3"
     with StateStore(state_path) as state_store:
         document_states = state_store.list_documents()
+        attempts = state_store.list_all_attempts()
     report = build_acquisition_report(
         sampling_counters=counters,
         applications=applications,
         documents=documents,
         document_states=document_states,
+        attempts=attempts,
         extracted_texts=extracted,
         timelines=timelines,
     )

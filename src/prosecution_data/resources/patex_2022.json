@@ -9,14 +9,12 @@
     "transactions": {
       "application_number": ["application_number", "appl_id"],
       "event_code": ["event_code"],
-      "event_date": ["event_date"],
-      "event_description": ["event_description"]
+      "event_date": ["recorded_date", "event_date"]
     },
     "cms_documents": {
       "application_number": ["application_number", "appl_id"],
-      "document_id": ["document_id", "document_identifier"],
       "document_code": ["document_code"],
-      "document_date": ["document_date", "document_filing_date"]
+      "document_date": ["mailroom_date", "document_date", "document_filing_date"]
     },
     "cms_document_codes": {
       "document_code": ["document_code"],
@@ -31,14 +29,24 @@
       "child_application_number": ["child_application_number", "child_appl_id"]
     }
   },
+  "optional_aliases": {
+    "transactions": {
+      "event_description": ["event_description"]
+    },
+    "cms_documents": {
+      "document_id": ["document_id", "document_identifier"],
+      "number_of_pages": ["number_of_pages"]
+    }
+  },
   "document_categories": {
     "office_action": ["CTNF", "CTFR"],
-    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND"],
+    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND", "A..."],
     "next_examination_event": ["CTNF", "CTFR", "NOA", "ABN"]
   },
   "transaction_categories": {
     "office_action": ["CTNF", "CTFR"],
-    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND"],
+    "applicant_response": ["RESP", "A.NE", "A.AF", "AMND", "A..."],
+    "next_examination_event": ["NOA", "N/=", "MN/="],
     "terminal_abandonment": ["ABN"]
   }
 }

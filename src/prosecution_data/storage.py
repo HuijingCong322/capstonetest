@@ -48,9 +48,9 @@ def safe_document_path(
 _TRANSITIONS = {
     "pending": {"downloaded", "failed"},
     "failed": {"pending", "downloaded", "failed"},
-    "downloaded": {"extracted", "extraction_failed"},
-    "extraction_failed": {"extracted", "extraction_failed"},
-    "extracted": {"extracted"},
+    "downloaded": {"downloaded", "failed", "extracted", "extraction_failed"},
+    "extraction_failed": {"downloaded", "failed", "extracted", "extraction_failed"},
+    "extracted": {"downloaded", "failed", "extracted"},
 }
 
 
@@ -85,18 +85,32 @@ class StateStore:
                 sha256 TEXT,
                 path TEXT,
                 error_category TEXT,
+                byte_length INTEGER,
+                retrieved_at TEXT,
                 payload_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id TEXT NOT NULL,
                 outcome TEXT NOT NULL,
+                error_category TEXT,
                 error TEXT,
                 headers_json TEXT NOT NULL
             );
             """
         )
+        self._ensure_column("documents", "byte_length", "INTEGER")
+        self._ensure_column("documents", "retrieved_at", "TEXT")
+        self._ensure_column("attempts", "error_category", "TEXT")
         self.connection.commit()
+
+    def _ensure_column(self, table: str, column: str, sql_type: str) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
 
     def upsert_document(self, record: DocumentRecord, status: str = "pending") -> None:
         self.connection.execute(
@@ -122,6 +136,23 @@ class StateStore:
         ).fetchone()
         return str(row["status"]) if row else None
 
+    def get_document(self, document_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM documents WHERE document_id = ?", (document_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["payload"] = json.loads(result.pop("payload_json"))
+        return result
+
+    def stored_file_is_valid(self, document_id: str) -> bool:
+        row = self.get_document(document_id)
+        if not row or not row.get("path") or not row.get("sha256"):
+            return False
+        path = Path(str(row["path"]))
+        return path.is_file() and _file_hash(path) == row["sha256"]
+
     def set_document_status(
         self,
         document_id: str,
@@ -130,6 +161,8 @@ class StateStore:
         sha256: str | None = None,
         path: Path | None = None,
         error_category: str | None = None,
+        byte_length: int | None = None,
+        retrieved_at: str | None = None,
     ) -> None:
         current = self.get_document_status(document_id)
         if current is None:
@@ -140,10 +173,14 @@ class StateStore:
             """
             UPDATE documents
             SET status = ?, sha256 = COALESCE(?, sha256), path = COALESCE(?, path),
-                error_category = ?
+                error_category = ?, byte_length = COALESCE(?, byte_length),
+                retrieved_at = COALESCE(?, retrieved_at)
             WHERE document_id = ?
             """,
-            (status, sha256, str(path) if path else None, error_category, document_id),
+            (
+                status, sha256, str(path) if path else None, error_category,
+                byte_length, retrieved_at, document_id,
+            ),
         )
         self.connection.commit()
 
@@ -152,6 +189,7 @@ class StateStore:
         document_id: str,
         *,
         outcome: str,
+        error_category: str | None = None,
         error: str | None = None,
         headers: Mapping[str, str] | None = None,
         secret_values: Iterable[str] = (),
@@ -167,19 +205,41 @@ class StateStore:
                 if secret:
                     safe_error = safe_error.replace(secret, "[REDACTED]")
         self.connection.execute(
-            "INSERT INTO attempts(document_id, outcome, error, headers_json) VALUES (?, ?, ?, ?)",
-            (document_id, outcome, safe_error, json.dumps(safe_headers, sort_keys=True)),
+            """INSERT INTO attempts(document_id, outcome, error_category, error, headers_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                document_id, outcome, error_category, safe_error,
+                json.dumps(safe_headers, sort_keys=True),
+            ),
         )
         self.connection.commit()
 
     def list_attempts(self, document_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT outcome, error, headers_json FROM attempts WHERE document_id = ? ORDER BY id",
+            """SELECT outcome, error_category, error, headers_json
+               FROM attempts WHERE document_id = ? ORDER BY id""",
             (document_id,),
         ).fetchall()
         return [
             {
                 "outcome": row["outcome"],
+                "error_category": row["error_category"],
+                "error": row["error"],
+                "headers": json.loads(row["headers_json"]),
+            }
+            for row in rows
+        ]
+
+    def list_all_attempts(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """SELECT document_id, outcome, error_category, error, headers_json
+               FROM attempts ORDER BY id"""
+        ).fetchall()
+        return [
+            {
+                "document_id": row["document_id"],
+                "outcome": row["outcome"],
+                "error_category": row["error_category"],
                 "error": row["error"],
                 "headers": json.loads(row["headers_json"]),
             }
@@ -190,7 +250,7 @@ class StateStore:
         rows = self.connection.execute(
             """
             SELECT document_id, application_number, status, sha256, path,
-                   error_category, payload_json
+                   error_category, byte_length, retrieved_at, payload_json
             FROM documents ORDER BY application_number, document_id
             """
         ).fetchall()
@@ -202,6 +262,8 @@ class StateStore:
                 "sha256": row["sha256"],
                 "path": row["path"],
                 "error_category": row["error_category"],
+                "byte_length": row["byte_length"],
+                "retrieved_at": row["retrieved_at"],
                 "payload": json.loads(row["payload_json"]),
             }
             for row in rows

@@ -1,9 +1,15 @@
 from pathlib import Path
 from datetime import date
 
+import pandas as pd
 import pytest
 
-from prosecution_data.patex import PatExValidationError, build_manifests, validate_patex_inputs
+from prosecution_data.patex import (
+    PatExValidationError,
+    build_manifests,
+    load_patex_mapping,
+    validate_patex_inputs,
+)
 from prosecution_data.schemas import PatExInputs, SampleOptions
 
 
@@ -121,7 +127,10 @@ def test_unknown_document_codes_are_preserved_and_counted() -> None:
         SampleOptions(sample_size=20, one_per_family=False),
     )
 
-    unknown = next(record for record in bundle.documents if record.document_id == "DOC-5")
+    unknown = next(
+        record for record in bundle.documents
+        if record.metadata["source_document_id"] == "DOC-5"
+    )
     assert unknown.document_category == "other"
     assert bundle.counters["unknown_document_codes"] == 1
 
@@ -141,3 +150,105 @@ def test_invalid_identifier_row_is_rejected_and_counted(tmp_path: Path) -> None:
 
     assert bundle.counters["invalid_application_identifiers"] == 1
     assert all(record.application_number != "12000007" for record in bundle.applications)
+
+
+def test_official_2022_headers_are_accepted_and_receive_synthetic_ids(tmp_path: Path) -> None:
+    application_data = tmp_path / "application_data.csv"
+    application_data.write_text(
+        "application_number,filing_date,appl_status_desc,public_indicator\n"
+        "12/100001,2020-01-01,Application Undergoing Examination,Y\n",
+        encoding="utf-8",
+    )
+    transactions = tmp_path / "transactions.csv"
+    transactions.write_text(
+        "application_number,event_code,recorded_date\n12/100001,A...,2021-02-01\n",
+        encoding="utf-8",
+    )
+    cms_documents = tmp_path / "cms_documents.csv"
+    cms_documents.write_text(
+        "application_number,mailroom_date,document_code,number_of_pages\n"
+        "12/100001,2021-01-01,CTNF,8\n",
+        encoding="utf-8",
+    )
+    cms_codes = tmp_path / "cms_document_codes.csv"
+    cms_codes.write_text(
+        "document_code,document_description\nCTNF,Non-Final Rejection\n",
+        encoding="utf-8",
+    )
+    inputs = PatExInputs(application_data, transactions, cms_documents, cms_codes)
+
+    validate_patex_inputs(inputs)
+    bundle = build_manifests(inputs, SampleOptions(sample_size=10))
+
+    assert len(bundle.applications) == 1
+    assert bundle.documents[0].document_id.startswith("patex-doc:")
+    assert bundle.documents[0].metadata["identifier_kind"] == "synthetic_patex_event"
+    assert bundle.transactions[0].source_identifier.startswith("patex-tx:")
+    assert bundle.transactions[0].description is None
+
+
+def test_ingestion_filters_chunks_without_concatenating_full_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pd, "concat", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("concat")))
+
+    bundle = build_manifests(
+        fixture_inputs(), SampleOptions(sample_size=2, one_per_family=False, chunksize=1)
+    )
+
+    assert len(bundle.applications) == 2
+
+
+def test_family_reconstruction_keeps_siblings_connected_through_excluded_parent(tmp_path: Path) -> None:
+    continuity = tmp_path / "continuity_parents.csv"
+    continuity.write_text(
+        "appl_id,parent_appl_id\n12/000001,12/999999\n12/000002,12/999999\n",
+        encoding="utf-8",
+    )
+
+    bundle = build_manifests(
+        fixture_inputs(continuity_parents=continuity),
+        SampleOptions(sample_size=20, one_per_family=True),
+    )
+
+    numbers = [record.application_number for record in bundle.applications]
+    assert "12000001" in numbers
+    assert "12000002" not in numbers
+
+
+def test_transaction_identifiers_are_unique_and_content_stable() -> None:
+    bundle = build_manifests(
+        fixture_inputs(), SampleOptions(sample_size=20, one_per_family=False)
+    )
+    identifiers = [record.source_identifier for record in bundle.transactions]
+
+    assert len(identifiers) == len(set(identifiers))
+    assert all(identifier.startswith("patex-tx:") for identifier in identifiers)
+
+
+def test_transaction_order_and_ids_are_stable_when_source_rows_are_reordered(
+    tmp_path: Path,
+) -> None:
+    header, *rows = (FIXTURES / "transactions.csv").read_text(encoding="utf-8").splitlines()
+    rows.extend(
+        [
+            "12/000001,RESP,2019-03-01,Second same-day response",
+            "12/000001,RESP,,Undated response",
+        ]
+    )
+    forward = tmp_path / "forward.csv"
+    reverse = tmp_path / "reverse.csv"
+    forward.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+    reverse.write_text("\n".join([header, *reversed(rows)]) + "\n", encoding="utf-8")
+    options = SampleOptions(sample_size=20, one_per_family=False, chunksize=2)
+
+    first = build_manifests(fixture_inputs(transactions=forward), options)
+    second = build_manifests(fixture_inputs(transactions=reverse), options)
+
+    assert first.transactions == second.transactions
+
+
+def test_official_response_and_allowance_codes_are_categorized() -> None:
+    categories = load_patex_mapping()["transaction_categories"]
+
+    assert "A..." in categories["applicant_response"]
+    assert "N/=" in categories["next_examination_event"]
+    assert "MN/=" in categories["next_examination_event"]
