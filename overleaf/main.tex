@@ -1,0 +1,272 @@
+\pdfoutput=1
+\documentclass[11pt]{article}
+\usepackage[review]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xurl}
+\newlist{compactitem}{itemize}{1}
+\setlist[compactitem]{label=\textbullet,noitemsep,topsep=3pt,leftmargin=*}
+\newlist{compactenum}{enumerate}{1}
+\setlist[compactenum]{label=\arabic*.,noitemsep,topsep=3pt,leftmargin=*}
+\providecommand{\Section}{\section}
+\newcommand{\bench}{\textsc{ProsecutionBench}}
+\newcommand{\hist}{\mathcal{H}}
+\newcommand{\state}{\mathcal{S}}
+\newcommand{\claims}{\mathcal{C}}
+\newcommand{\rejects}{\mathcal{R}}
+\newcommand{\evidence}{\mathcal{E}}
+
+\title{ProsecutionBench: State Tracking and Forecasting in Patent Prosecution}
+\author{Anonymous ARR submission}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Patent prosecution requires reasoning over changing claims, examiner rejections, and applicant arguments. Modeling this interaction requires more than generating plausible responses: a model must identify which claims are under examination, which rejections remain unresolved, and which evidence supports each argument. We propose \bench, a benchmark for state tracking and response-conditioned forecasting in multi-turn patent prosecution. The benchmark links versioned claims, rejection grounds, applicant responses, and subsequent examination events across public prosecution histories. It defines three tasks: claim amendment generation, response strategy and argument modeling, and subsequent-event prediction. Evaluation separates agreement with historical responses from evidence grounding, procedural consistency, and calibrated forecasting, with pending cases treated as censored observations rather than negative outcomes. We will compare long-context, retrieval-augmented, and agentic methods under chronological, family-disjoint evaluation to test whether explicit prosecution state improves prediction beyond access to the same history. \bench\ provides a framework for studying how language models represent and predict evolving technical and legal records without equating historical prediction with causal strategy optimization.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Patent prosecution is an iterative exchange in which an examiner evaluates claims and an applicant responds through amendments and arguments. Each exchange changes the record on which subsequent examination depends. Importantly, submitting an amendment does not necessarily make it part of the claims under examination: the prosecution record must distinguish proposed amendments from amendments entered for consideration \citep{usptompep714}. A model that overlooks this distinction may produce a fluent response while reasoning about the wrong claim version. This motivates a central question: \emph{can language models maintain a faithful representation of an evolving prosecution record and use it to predict subsequent examination events?}
+
+Recent work provides increasingly detailed resources for this problem. The Harvard USPTO Patent Dataset supports large-scale modeling of patent applications \citep{suzgun2023hupd}, while PANORAMA preserves examination decision trails and evaluates stages of examiner reasoning \citep{lim2025panorama}. PatRe directly studies Office Action and applicant rebuttal generation across examination stages \citep{wang2026patre}. Claim-focused benchmarks further support revision and novelty modeling \citep{jiang2024patentcr,lee2024patentedits}. Together, these resources establish patent prosecution as an interactive modeling problem. We build on this foundation to study whether explicit representation of evolving claim and rejection state improves \emph{response-conditioned forecasting}.
+
+These objectives introduce several challenges. First, a prosecution history contains multiple versions of claims, changes in claim status, and arguments that address different subsets of rejection grounds. Second, supporting passages must be associated with the correct claim version and the record available at the prediction stage. Third, an observed response is only one possible applicant action; matching its wording does not establish legal adequacy, and a different response cannot be assigned the historical response's outcome. Finally, evaluation must distinguish an observed abandonment from an application that remains pending or has an incomplete record. These are properties of the proposed learning problem, not reasons to treat a language model's prediction as a legal determination.
+
+We propose \bench\ to study these challenges using public prosecution histories. Given a history $\hist_t$ and its structured state $\state_t$, the benchmark asks models to generate an applicant action $A_t$ and, in a separate task, predict the next observed event $Y_{t+1}$ conditional on the \emph{actual} applicant action. The state records claim versions, unresolved rejections, evidence links, and procedural status. It is a representation to be evaluated, not an assumed sufficient statistic. We will compare state-based prediction with history-only and summary-based prediction under matched information and inference budgets.
+
+The benchmark will be constructed without requiring eventual allowance for inclusion. Stage-specific inputs will exclude later amendments, future citations, and downstream disposition fields. Evaluation will combine chronological and patent-family separation, claim-level annotation, and forecasting protocols that retain censored cases. The intended release comprises document identifiers and permitted text, versioned annotations, split manifests, evaluation code, and reproducible baselines. Dataset scale and empirical conclusions will be reported only after collection and evaluation.
+
+\medskip\noindent\textbf{Summary of Main Contributions.}
+The proposed contributions are as follows:
+\begin{compactitem}
+    \item \textbf{State-aware problem formulation.} We formulate patent prosecution as linked claim revision, applicant response, and event-prediction tasks over an explicit representation of claim versions, rejection status, evidence provenance, and amendment entry.
+    \item \textbf{A longitudinal benchmark design.} We define a public-record construction protocol that aligns examiner concerns with applicant edits, arguments, and subsequent observed events, without restricting the cohort to eventually allowed applications.
+    \item \textbf{Grounded and leakage-controlled evaluation.} We specify claim-level fidelity, rejection coverage, citation support, procedural consistency, and calibrated forecasting measures, with stage-specific inputs, family-disjoint temporal splits, and explicit treatment of censoring.
+    \item \textbf{Controlled tests of prosecution memory.} We define matched-information comparisons of long-context, retrieval-augmented, and agentic methods to isolate whether structured state improves prediction beyond the same history or a length-matched summary.
+\end{compactitem}
+
+\Section{Related Work}\label{sec:related-work}
+
+\subsection{Patent Examination and Prosecution Benchmarks}
+\label{sec:rw-patent-examination}
+
+Patent resources differ in both their supervision and the examination stages they represent. The Harvard USPTO Patent Dataset provides structured application text and metadata \citep{suzgun2023hupd}. The USPTO Office Action Research Dataset provides extracted examination information, while PatEx provides application and prosecution metadata \citep{uspto2017officeactions,uspto2022patex}. These resources support cohort construction and document alignment, but their metadata should not be treated as a complete, already aligned corpus of applicant responses.
+
+The closest benchmarks are PANORAMA and PatRe. PANORAMA preserves examination decision trails and decomposes examiner reasoning into tasks involving prior art, supporting passages, novelty, and non-obviousness \citep{lim2025panorama}. PatRe evaluates Office Action and applicant rebuttal generation across examination stages, including settings with provided and retrieved evidence \citep{wang2026patre}. PatRe uses prosecution context and evaluates substantive properties of generated responses, including rejection coverage. Building on these capabilities, \bench\ makes versioned claim state, amendment-entry status, and calibrated prediction after an observed applicant response explicit evaluation targets.
+
+Other patent benchmarks address complementary capabilities. PEDANTIC studies definiteness in patent claims \citep{knappich2025pedantic}; PILOT-Bench evaluates patent-domain legal reasoning through IRAC-aligned classification \citep{jang2025pilot}; and MoZIP and IPEval assess broader intellectual-property knowledge and consultation \citep{ni2024mozip,wang2024ipeval}. These capabilities can support prosecution modeling, but they do not substitute for evaluating how claim-level information is maintained and used across a changing record.
+
+\subsection{Claim Rev. \& Feedback-Guided Editing}
+\label{sec:rw-claim-revision}
+
+Patent-CR studies claim revision using rejected and granted claim versions \citep{jiang2024patentcr}. PatentEdits formulates patent novelty through textual entailment and provides supervision from claim revisions \citep{lee2024patentedits}. These are particularly relevant to amendment generation because they connect technical distinctions to textual changes. In contrast, PAP2PAT studies outline-guided patent generation, and AutoPatent uses multiple agents for patent drafting \citep{knappich2025pap2pat,wang2024autopatent}. Drafting and revision are related to prosecution, but neither generated text nor an examiner-like agent supplies observed evidence of how a real examiner subsequently responds.
+
+Outside patents, ITERATER characterizes iterative human revision, EditEval evaluates instruction-based text improvement, and PEER models collaborative writing and editing \citep{du2022iterater,dwivediyu2024editeval,schick2022peer}. \bench\ builds on this view of revision as structured change rather than unconstrained regeneration. Its proposed additional supervision links an edit to the specific rejection it addresses, its support in the application, whether it enters the examination record, and the next observed event. Historical edit agreement remains useful, but alternative well-supported amendments must not be labeled incorrect solely because they differ from the recorded response.
+
+\subsection{Legal Reasoning and Evidence Grounding}
+\label{sec:rw-legal-reasoning}
+
+Legal benchmarks provide complementary tests of document understanding and reasoning. LexGLUE spans legal language-understanding tasks, and LegalBench organizes a broad collection of legal reasoning tasks \citep{chalkidis2022lexglue,guha2023legalbench}. CUAD and LEDGAR provide contract-review and provision-classification supervision \citep{hendrycks2021cuad,tuggener2020ledgar}. ContractNLI explicitly connects document-level legal inference to supporting evidence \citep{koreeda2021contractnli}. SciFact provides a related formulation in which scientific claims are verified against evidence \citep{wadden2020scifact}.
+
+These resources motivate evidence-localized evaluation rather than judging a response only by its overall plausibility. \bench\ applies this principle to a versioned record: support must be valid for the claim, rejection, and document version available at a particular stage. We will distinguish an argument that addresses an examiner concern from one that is supported by the cited material, and both from an argument that is later accepted in the observed record. This separation avoids treating agreement with an examiner as a universal measure of legal correctness.
+
+\subsection{Retrieval-Augmented and Citation-Grounded Generation}
+\label{sec:rw-retrieval-grounding}
+
+Retrieval methods provide a natural basis for selecting evidence from lengthy applications and cited references. BM25 supplies a sparse retrieval baseline \citep{robertson2009bm25}; Sentence-BERT, dense passage retrieval, and ColBERT provide complementary embedding and interaction-based approaches \citep{reimers2019sbert,karpukhin2020dpr,khattab2020colbert}. BEIR evaluates retrieval across heterogeneous tasks and domains \citep{thakur2021beir}. Retrieval-augmented generation conditions language generation on retrieved passages \citep{lewis2020rag}, while ALCE and Self-RAG study citation-grounded generation and retrieval with self-critique \citep{gao2023alce,asai2023selfrag}.
+
+In \bench, retrieval is a component of response modeling rather than a separate claim to novelty in prior-art discovery. The primary setting uses evidence available in the prosecution record at the prediction cutoff. An optional expanded-corpus setting will enforce document-availability dates. Evaluation will distinguish retrieval failure from reasoning failure using provided-evidence comparisons, and will check whether cited passages support the specific technical assertion made about the relevant claim version. A citation to a topically similar patent is insufficient.
+
+\subsection{Long-Context Reasoning \& State Tracking}
+\label{sec:rw-state-tracking}
+
+Access to a long history does not establish that its relevant content is used consistently. Lost in the Middle studies position-dependent use of context, while LongBench and RULER evaluate long-context capabilities across tasks and controlled settings \citep{liu2024lost,bai2024longbench,hsieh2024ruler}. LoCoMo evaluates long-term conversational memory \citep{maharana2024locomo}. Dialogue research provides an explicit state-tracking perspective through MultiWOZ, the Schema-Guided Dialogue Dataset, and TRADE \citep{budzianowski2018multiwoz,rastogi2019sgd,wu2019trade}.
+
+Prosecution state differs from a summary of prior messages. It must preserve versioned technical language, claim dependencies, outstanding grounds, evidence links, and uncertainty about amendment entry. Nevertheless, whether this structure improves prediction is an empirical question. We will compare the same language model using the raw history, a length-matched unstructured summary, structured state alone, and structured state with the history. These comparisons test the value of the representation without attributing gains from additional documents, larger budgets, or privileged annotations to state tracking.
+
+\subsection{Language Agents \& Sequential Evaluation}
+\label{sec:rw-agents}
+
+ReAct interleaves reasoning and action, and Reflexion uses feedback to improve subsequent agent behavior \citep{yao2022react,shinn2023reflexion}. AgentBench, AgentBoard, WebArena, and $\tau$-bench evaluate agents across interactive tasks, environments, and tool-mediated exchanges \citep{liu2023agentbench,ma2024agentboard,zhou2023webarena,yao2024taubench}. These studies motivate evaluating intermediate behavior and consistency rather than final text alone. Sequential prediction also requires attention to compounding errors, a central concern in imitation learning \citep{ross2011dagger}.
+
+However, replaying a historical prosecution record is not equivalent to interacting with an environment that supplies validated outcomes for arbitrary amendments. \bench\ will therefore separate prediction on observed history prefixes from free-running simulation. Once a generated applicant action differs from the recorded action, the historical next event is not its counterfactual label. Off-policy evaluation provides a useful conceptual reference, but its identification and overlap requirements cannot be assumed for prosecution records \citep{dudik2011doubly}. The primary forecasting task is observational and conditions on the applicant response that actually occurred.
+
+\subsection{Scientific Review and Author Response}
+\label{sec:rw-peer-review}
+
+Scientific peer review provides a related setting for studying critique, response, and revision. PeerRead supports analysis of papers and peer reviews, while DISAPERE annotates discourse relations in review discussions \citep{kang2018peerread,kennard2022disapere}. ARIES links reviewer feedback to scientific paper edits \citep{darcy2024aries}. AgentReview studies review dynamics with language-model agents, and Re2 represents full-stage review and multi-turn rebuttal discussions \citep{jin2024agentreview,zhang2025re2}.
+
+The shared structure is an artifact followed by expert criticism, an author response, and reassessment. This analogy motivates concern-to-response alignment and analysis across rounds, but the domains should not be treated as interchangeable. Our proposed patent benchmark centers on claim identity, amendment entry, statutory grounds, and cited technical evidence. Peer-review data are related methodological resources, not evidence that a prosecution model transfers across domains; such transfer would require a separate experiment.
+
+\subsection{Faithfulness, Calibration, \& Generalization}
+\label{sec:rw-evaluation}
+
+ROUGE and BERTScore measure reference-based text agreement \citep{lin2004rouge,zhang2019bertscore}. They provide useful diagnostics but do not directly test whether a claim edit is procedurally valid or an argument is supported. FActScore and QAFactEval offer complementary approaches to fine-grained factuality and consistency evaluation \citep{min2023factscore,fabbri2022qafacteval}, while work on language models as judges motivates examining the reliability of automated assessment \citep{zheng2023judge}. \bench\ will combine structured checks with independently adjudicated expert annotations rather than equating a single model-judge score with correctness.
+
+For forecasting, calibration must be evaluated separately from classification accuracy \citep{guo2017calibration}. Competing-risk modeling, exemplified by DeepHit, provides a relevant approach to time-dependent outcomes with censoring \citep{lee2018deephit}. WILDS and Datasheets for Datasets motivate explicit treatment of distribution shifts and documentation of dataset construction \citep{koh2021wilds,gebru2021datasheets}. Our protocol integrates these concerns through stage-specific information boundaries, family-disjoint temporal evaluation, recorded censoring, and separate reporting of textual, evidential, procedural, and predictive performance.
+
+\section{Approach}
+\label{sec:approach}
+
+\subsection{Problem Formulation}
+\label{sec:approach-formulation}
+
+Let $\hist_t=(d_1,\ldots,d_{m_t})$ denote the ordered record available at a prediction stage $t$, including the application, entered claim versions, examiner communications, earlier applicant responses, and available cited references. Let
+\begin{equation}
+    \state_t=g(\hist_t)
+    =(\claims_t,\rejects_t,\evidence_t,\mathcal{P}_t)
+\end{equation}
+represent versioned claims, rejection status, evidence links, and procedural state. Every extracted assertion carries a source document and passage. Ambiguous or missing information is represented explicitly rather than inferred from later events. The representation $g$ may be rule-based, learned, or agent-maintained; no Markov-sufficiency assumption is imposed.
+
+An applicant action is represented as $A_t=(\Delta\claims_t,Z_t,B_t)$, where $\Delta\claims_t$ contains proposed claim edits, $Z_t$ is a multi-label response strategy, and $B_t$ contains arguments linked to examiner concerns and evidence. The benchmark separates
+\begin{align}
+    &p_{\theta}(A_t\mid\hist_t,\state_t), \label{eq:response}\\
+    &p_{\phi}(Y_{t+1}\mid\hist_t,\state_t,A_t). \label{eq:forecast}
+\end{align}
+Equation~\ref{eq:response} models the applicant response. Equation~\ref{eq:forecast} predicts a subsequent observed event using the actual recorded response. It estimates an observational conditional distribution, not the effect of intervening on the response.
+
+\subsection{Versioned Prosecution State}
+\label{sec:approach-state}
+
+Claim records preserve application-specific claim numbers, version identifiers, text, dependencies, and status. Newly presented claims receive their recorded identifiers; canceled claims are not silently repurposed. Rejection records link a ground and examiner concern to affected claims, cited passages, and observed subsequent status. Proposed amendments are retained separately from the entered claim set until the available record supports entry, including partial entry where explicitly recorded \citep{usptompep714}.
+
+This distinction constrains state updates. A future communication confirming entry may supervise a later state but cannot be exposed when predicting that communication. Likewise, an omitted discussion is not automatically labeled a withdrawn rejection. State extraction will include confidence and an unknown category, with an adjudicated subset used to evaluate claim-version accuracy, dependency correctness, rejection-link accuracy, and entry-status errors.
+
+\subsection{Benchmark Construction}
+\label{sec:approach-data}
+
+We will use public application text, examination metadata, and accessible prosecution documents to identify and align histories \citep{suzgun2023hupd,uspto2017officeactions,uspto2022patex}. Metadata sources are discovery and linkage resources, not substitutes for obtaining and validating the underlying Office Actions and responses. The collection protocol will document source coverage, access conditions, text-extraction errors, missing documents, and eligibility exclusions. No benchmark size is assumed before this audit.
+
+The sampling frame will not require eventual allowance. It will retain publicly available applications with recorded abandonment or pending status, subject to task-specific document availability. Response-generation examples require an observed response; the broader event-forecasting cohort must not exclude cases solely because no response occurred. Each example will carry a task eligibility mask and a censoring indicator.
+
+Document order will use recorded filing and mailing information, with ambiguous same-date ordering excluded or adjudicated. We distinguish retrospective reconstruction of the record available to prosecution participants from a prospective public-data setting, which additionally requires verifiable public-availability dates. Granted claim text, future examiner citations, and later status metadata are excluded from earlier inputs in either setting.
+
+\subsection{Three Linked Tasks}
+\label{sec:approach-tasks}
+
+\paragraph{Claim amendment generation.}
+Given the current claims, Office Action, specification, and available evidence, generate a structured edit sequence and resulting proposed claims. Outputs identify added, removed, and modified limitations and their links to examiner concerns. No-edit responses and claim cancellation are represented explicitly. Historical edit agreement is scored separately from expert assessment of support, responsiveness, and preservation of intended claim content.
+
+\paragraph{Response strategy and argument modeling.}
+Predict combinations of amendment, argument, cancellation, and other in-scope response types, then generate arguments aligned to individual concerns. A response must identify what it addresses and cite supporting application or prior-art passages. Coverage, support, and contradiction are assessed separately; mentioning a rejection does not establish that it has been addressed.
+
+\paragraph{Subsequent-event forecasting.}
+Given a stage and an observed applicant response, predict the next in-scope substantive event and, where annotated, the status of existing rejection grounds. The event ontology includes further examination actions, advisory actions, requests for continued examination, notices of allowance, and recorded abandonment. A request for continued examination is an intermediate event, not a terminal disposition. Separate fixed-horizon analyses will model the first observed notice of allowance or recorded abandonment, with unresolved observations right-censored. These operational endpoints do not assert an application's permanent legal status.
+
+\section{Experiments}
+\label{sec:exp}
+
+\subsection{Research Questions and Comparisons}
+\label{sec:exp-questions}
+
+The experimental protocol tests four questions: whether explicit state improves response modeling and forecasting; which state components account for any improvement; how performance changes with history length and prosecution round; and whether predictive confidence remains calibrated across time, technical areas, and observed outcomes. The study will compare the same base models under identical source access and task definitions.
+
+Baselines will include label-prior and structured-feature predictors; direct long-context prompting; retrieval-augmented prediction using sparse and dense retrieval; a length-matched prose-memory baseline; structured-state prediction; and an agent that retrieves evidence and updates state. Gold state is restricted to a separately reported diagnostic condition. The main comparison uses predicted state, and all state-construction tokens, retrieval calls, and model invocations count toward the inference budget. We will report performance-cost curves rather than assign unequal computation to a single nominal comparison.
+
+\subsection{Splits and Information Controls}
+\label{sec:exp-splits}
+
+The evaluation will combine prediction-date cutoffs with application-family grouping. Training examples must precede the training cutoff. Family components assigned to held-out evaluation cannot contribute examples to training, even when a related application's history begins earlier. Components that create temporal conflicts will be quarantined or assigned wholly to a held-out partition, with exclusions documented. We will additionally deduplicate near-identical documents and response templates across partitions.
+
+All documents used for a prediction must satisfy its information cutoff. Retrieval indices will be versioned by availability, and future labels will be stored separately from model inputs. We will report performance by prosecution round, record length, technical area, response type, outcome, and document completeness. These controls reduce observable leakage but cannot guarantee that a pretrained model has never encountered a public patent or its later disposition.
+
+\subsection{Metrics and Expert Evaluation}
+\label{sec:exp-metrics}
+
+Amendment evaluation will report claim correspondence, limitation-level edit precision and recall, dependency validity, unsupported additions, and historical edit agreement. Response evaluation will report multi-label strategy performance, concern coverage, evidence support, and contradictions. ROUGE and BERTScore will be auxiliary diagnostics rather than aggregate measures of legal adequacy \citep{lin2004rouge,zhang2019bertscore}. Empty responses and indiscriminate claim cancellation will not receive high overall scores merely for avoiding unsupported assertions; coverage and retained claim content will be reported jointly.
+
+Forecasting will report macro-F1 for observed event classes, log loss, Brier scores, and calibration curves. Time-dependent analyses will use a censoring-aware likelihood and, when the necessary assumptions are defensible, censoring-adjusted horizon metrics. Censoring models will be fitted without test-outcome leakage, and sensitivity analyses will address informative loss to follow-up \citep{lee2018deephit}. Intervals and significance comparisons will use family-clustered resampling rather than treat repeated stages as independent observations.
+
+A stratified subset will be independently annotated by qualified patent-domain experts and adjudicated for disagreement. Evaluation will distinguish legal support in the provided record, responsiveness, and agreement with historical behavior. Automated judges will be calibrated against this subset, with agreement and failure categories reported \citep{zheng2023judge}. Expert sample size, annotation effort, and inter-annotator agreement will be disclosed after collection.
+
+\subsection{Ablations and Rollout Evaluation}
+\label{sec:exp-ablations}
+
+Ablations will remove claim-version history, dependency structure, rejection links, evidence provenance, or entry status while preserving the remaining input budget. Additional comparisons will vary retrieval quality, state compression, memory-update frequency, and the availability of prior rounds. Provided-evidence and provided-state conditions will localize retrieval and extraction errors without being conflated with deployable performance.
+
+The main sequential analysis predicts each next event from the corresponding observed prefix. Free-running simulations will be evaluated separately for state consistency, evidence support, and expert-assessed plausibility. They will not be scored for historical outcome accuracy after a generated response diverges from the recorded response. No experiment will claim that a generated amendment causes allowance merely because an observational predictor assigns it a high probability.
+
+\section{Conclusion}
+\label{sec:conc}
+
+We propose \bench\ to evaluate state tracking and response-conditioned forecasting in patent prosecution. The central objective is to test whether models maintain the correct claims, rejections, evidence, and procedural state as the record evolves, and whether that representation improves subsequent-event prediction. The proposed benchmark separates historical imitation, evidence-grounded response quality, and calibrated forecasting while preserving the limits of observational supervision.
+
+\section*{Limitations}
+
+This manuscript specifies a benchmark and experimental protocol; it does not report a completed dataset or empirical findings. Public prosecution records cover a selected subset of applications, and document access, extraction quality, and missing interactions may limit representativeness. Historical actions reflect applicant goals, resources, and unobserved considerations, so observational associations cannot identify the effects of alternative strategies. The state representation may omit relevant information, and expert annotations may disagree. Temporal and family controls cannot eliminate unknown pretraining contamination. The proposed evaluation is initially limited to the selected U.S. prosecution settings and should not be generalized to other jurisdictions or procedural stages without validation.
+
+\section*{Ethical Considerations}
+
+Generated arguments and outcome estimates are research outputs, not legal advice or substitutes for a registered patent practitioner. A release will respect source access and redistribution conditions, minimize unnecessary personal information, and distinguish source text from model-generated content. Evaluation will not reward allowance probability alone, since an apparently favorable prediction could be obtained by abandoning valuable claim content. We will document coverage, exclusions, and annotation procedures following dataset-documentation principles \citep{gebru2021datasheets}. Any public demonstration will identify uncertainty, incomplete records, and the observational nature of its predictions.
+
+\bibliography{main}
+\bibliographystyle{acl_natbib}
+
+\appendix
+
+\section{Additional Dataset Details}
+\label{sec:appendix-add-dataset-details}
+
+\subsection{Record Schema}
+\label{sec:appendix-schema}
+
+Each document record will contain an application identifier, family component, source identifier, document type, recorded filing or mailing date, public-availability date when verifiable, text-extraction provenance, and access or redistribution conditions. Each claim version will contain its application-specific number, version identifier, text, dependency links, submission status, entry status, and supporting source spans. Each rejection will contain its ground, affected claim versions, examiner concern, referenced evidence, and observed status with provenance. Each response unit will link a strategy, argument, or proposed edit to one or more concerns.
+
+Forecast records will separate the input cutoff from the observed next event, follow-up interval, task eligibility, and censoring information. Unknown, unavailable, not applicable, and genuinely absent values will have distinct encodings. An unobserved response will not be encoded as an argument-only response. Likewise, a missing document will not be interpreted as evidence that prosecution ended.
+
+\subsection{Quality-Control Protocol}
+\label{sec:appendix-quality}
+
+The initial audit will verify application-document linkage, chronology, claim numbering, amendment markup, entry indicators, and availability of cited passages. Disagreements between structured metadata and source documents will be retained for adjudication. Where an amendment is only partially entered, the record will preserve the entered and unentered portions separately. Applications with uncertain ordering may remain eligible for some descriptive tasks while being excluded from stage-specific forecasting.
+
+The release will provide counts at each filtering step, missingness by document type and outcome, and the fraction of records requiring expert correction. Cohort comparisons will examine whether response-document availability changes the observed distribution of outcomes. These diagnostics are necessary to distinguish corpus coverage from model performance.
+
+\section{Additional Evaluation Details}
+\label{sec:appendix-add-results}
+
+\subsection{Concern-Level Rubric}
+\label{sec:appendix-rubric}
+
+For every examiner concern, evaluators will determine whether the response identifies the relevant claim version, states a substantive answer, links any amendment to the concern, and provides supporting evidence. Support is assessed at the assertion level, not inferred from the presence of a citation. A response may be responsive but unsupported, supported but incomplete, or inconsistent with the current procedural record. These dimensions will be stored separately rather than collapsed prematurely into one score.
+
+Claim-edit assessment will distinguish agreement with the historical edit from independent expert judgments of disclosure support, responsiveness, dependency integrity, and changes to the technical limitations. Claims of preserved legal scope require expert assessment and will not be inferred from token overlap. Expert reviewers will not see future examiner decisions when judging whether a response is supported by its input record.
+
+\subsection{Forecasting and Censoring}
+\label{sec:appendix-censoring}
+
+A prediction horizon must be fixed before inspecting held-out outcomes. Records ending before that horizon without the target event are censored, not negative examples. We will state the endpoint definition, observation cutoff, treatment of revival or resumed prosecution, and the assumptions used by any censoring adjustment. First-event analyses will distinguish a notice of allowance from patent issuance. Cases with conflicting or unresolved status indicators will receive an explicit uncertainty label or be excluded from the corresponding endpoint analysis with counts reported.
+
+\section{Prompts}
+\label{sec:prompts}
+
+\subsection{State Extraction}
+\label{sec:prompt-state}
+
+\begin{quote}
+Given only the supplied prosecution record, identify the current entered claims, proposed claim changes, claim dependencies, outstanding examiner concerns, supporting passages, and procedural status. Attach a source document and passage identifier to each assertion. Keep proposed amendments separate from entered amendments. Use unknown when the supplied record does not establish a fact. Do not infer entry, withdrawal, allowance, or abandonment from a future event or from missing text. Return the structured record using the provided schema.
+\end{quote}
+
+\subsection{Applicant Response}
+\label{sec:prompt-response}
+
+\begin{quote}
+Given the current claims, Office Action, application, available cited references, and prosecution state, produce a proposed applicant response. Identify the response strategy for each examiner concern, specify any proposed claim edits, and cite passages supporting each substantive assertion. Preserve claim identifiers and dependencies unless an explicit edit changes them. Distinguish a proposed amendment from one already entered. Do not assert that an argument will be accepted or that an amendment guarantees allowance.
+\end{quote}
+
+\subsection{Grounded Response Evaluation}
+\label{sec:prompt-evaluation}
+
+\begin{quote}
+Evaluate the candidate response using only the supplied stage-specific record. For each examiner concern, report whether it is addressed, which claim version is used, whether cited passages support the response, and whether the response contradicts the record. Evaluate proposed edits for disclosed support and dependency consistency. Record uncertainty where the materials are insufficient. Do not treat agreement with the historical response as sufficient evidence of correctness, and do not infer the outcome of an unobserved alternative response. Return separate judgments and evidence identifiers for each dimension.
+\end{quote}
+
+\end{document}

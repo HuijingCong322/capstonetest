@@ -1,0 +1,19 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.superpowers/
+
+# Generated research data and credentials
+data/
+*.sqlite3
+.env
+.env.*
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
