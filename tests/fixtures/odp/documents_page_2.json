@@ -1,0 +1,15 @@
+{
+  "count": 1,
+  "totalRecordCount": 1,
+  "patentFileWrapperDocumentDataBag": [
+    {
+      "applicationNumber": "12000001",
+      "documentId": "ODP-DOC-2",
+      "documentCode": "RESP",
+      "documentDescription": "Applicant Response",
+      "documentDate": "2020-03-04",
+      "mimeType": "application/pdf",
+      "documentSize": 9
+    }
+  ]
+}

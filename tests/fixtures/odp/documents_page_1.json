@@ -1,0 +1,15 @@
+{
+  "count": 1,
+  "totalRecordCount": 1,
+  "documentBag": [
+    {
+      "applicationNumberText": "12000001",
+      "documentIdentifier": "ODP-DOC-1",
+      "documentCode": "CTNF",
+      "documentDescription": "Non-Final Rejection",
+      "officialDate": "2020-01-02",
+      "mimeTypeIdentifier": "application/pdf",
+      "documentSizeQuantity": 12
+    }
+  ]
+}
