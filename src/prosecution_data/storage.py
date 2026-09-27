@@ -186,6 +186,27 @@ class StateStore:
             for row in rows
         ]
 
+    def list_documents(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT document_id, application_number, status, sha256, path,
+                   error_category, payload_json
+            FROM documents ORDER BY application_number, document_id
+            """
+        ).fetchall()
+        return [
+            {
+                "document_id": row["document_id"],
+                "application_number": row["application_number"],
+                "status": row["status"],
+                "sha256": row["sha256"],
+                "path": row["path"],
+                "error_category": row["error_category"],
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        ]
+
 
 @dataclass(frozen=True)
 class StoredFile:
