@@ -110,6 +110,8 @@ class TimelineRecord:
     forecast_eligible: bool
     censored: bool
     reason_codes: tuple[str, ...]
+    response_status: str = "unknown"
+    next_event_status: str = "unknown"
 
 
 def to_json_dict(value: Any) -> Any:
