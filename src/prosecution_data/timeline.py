@@ -109,7 +109,7 @@ def build_timeline(
             dated,
             response_index + 1,
             response["date"],
-            {"office_action", "next_examination_event", "terminal_abandonment"},
+            {"office_action", "next_examination_event", "terminal_abandonment", "procedure_change"},
             settings.max_interval_days,
         )
         if next_event is None:
@@ -194,6 +194,7 @@ def _has_next_event_after_response(events: list[dict[str, Any]]) -> bool:
             "office_action",
             "next_examination_event",
             "terminal_abandonment",
+            "procedure_change",
         }:
             return True
     return False

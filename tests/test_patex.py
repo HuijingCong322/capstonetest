@@ -252,3 +252,37 @@ def test_official_response_and_allowance_codes_are_categorized() -> None:
     assert "A..." in categories["applicant_response"]
     assert "N/=" in categories["next_examination_event"]
     assert "MN/=" in categories["next_examination_event"]
+
+
+def test_real_release_metadata_without_cms_or_public_indicator(tmp_path):
+    app = tmp_path / 'application_data.csv'
+    app.write_text('application_number,filing_date,appl_status_desc,earliest_pgpub_number,patent_number\n01234567,2010-01-01,Abandoned,US20100123456,\n01234568,2010-01-02,Pending,,\n')
+    tx = tmp_path / 'transactions.csv'
+    tx.write_text('application_number,event_code,recorded_date\n01234567,MCTNF,2011-01-01\n01234567,A...,2011-02-01\n01234567,MN/=.,2011-03-01\n01234568,MCTNF,2011-01-01\n')
+    codes = tmp_path / 'event_codes.csv'
+    codes.write_text('event_code,description\nMCTNF,Mail Non-Final Rejection\nA...,Response after Non-Final Action\nMN/=.,Mail Notice of Allowance\n')
+    inputs = PatExInputs(application_data=app, transactions=tx, event_codes=codes)
+    bundle = build_manifests(inputs, SampleOptions(sample_size=3, one_per_family=False))
+    assert [a.application_number for a in bundle.applications] == ['01234567']
+    assert bundle.documents == ()
+    assert bundle.transactions[0].description == 'Mail Non-Final Rejection'
+    assert bundle.applications[0].generation_eligible is False
+    assert bundle.applications[0].metadata['response_observed'] is True
+
+
+def test_real_transaction_codes_preserve_punctuation():
+    categories = load_patex_mapping()['transaction_categories']
+    assert 'MCTNF' in categories['office_action']
+    assert 'MCTFR' in categories['office_action']
+    assert 'MN/=.' in categories['next_examination_event']
+    assert 'A/RR' in categories['applicant_response']
+
+
+def test_timeline_stops_at_procedure_change():
+    from prosecution_data.timeline import build_timeline, TimelineSettings
+    from prosecution_data.schemas import ApplicationRecord, TransactionEvent
+    app = ApplicationRecord('01234567', date(2010,1,1), 'pending', '01234567', 'singleton', False, True)
+    tx = [TransactionEvent('01234567', code, date(2011,month,1), source_identifier=code)
+          for month,code in enumerate(['MCTNF','A...','RCEX','MCTFR'],1)]
+    timeline = build_timeline(app, [], tx, [], TimelineSettings())
+    assert timeline.candidate_links[0]['next_event_id'] == 'RCEX'

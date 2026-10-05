@@ -35,10 +35,11 @@ def normalize_application_number(value: object) -> str:
 class PatExInputs:
     application_data: Path
     transactions: Path
-    cms_documents: Path
-    cms_document_codes: Path
+    cms_documents: Path | None = None
+    cms_document_codes: Path | None = None
     continuity_parents: Path | None = None
     continuity_children: Path | None = None
+    event_codes: Path | None = None
 
 
 @dataclass(frozen=True)

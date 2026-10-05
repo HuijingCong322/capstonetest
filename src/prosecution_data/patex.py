@@ -48,6 +48,7 @@ def _input_files(inputs: PatExInputs) -> dict[str, Path | None]:
     return {
         "application_data": inputs.application_data,
         "transactions": inputs.transactions,
+        "event_codes": inputs.event_codes,
         "cms_documents": inputs.cms_documents,
         "cms_document_codes": inputs.cms_document_codes,
         "continuity_parents": inputs.continuity_parents,
@@ -67,6 +68,8 @@ def resolve_columns(columns: Iterable[str], aliases: Mapping[str, list[str]]) ->
 
 def validate_patex_inputs(inputs: PatExInputs) -> None:
     mapping = load_patex_mapping()
+    if (inputs.cms_documents is None) != (inputs.cms_document_codes is None):
+        raise PatExValidationError("cms_documents and cms_document_codes must be supplied together")
     for name, path in _input_files(inputs).items():
         if path is None:
             continue
@@ -109,9 +112,12 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
             except IdentifierError:
                 counters["invalid_application_identifiers"] += 1
                 continue
-            if str(row.get("public_indicator", "")).strip().lower() not in {
-                "y", "yes", "true", "1", "public",
-            }:
+            indicator = str(row.get("public_indicator", "")).strip().lower()
+            public = indicator in {"y", "yes", "true", "1", "public"} if indicator else bool(
+                str(row.get("earliest_pgpub_number", "")).strip()
+                or str(row.get("patent_number", "")).strip()
+            )
+            if not public:
                 counters["non_public_applications"] += 1
                 continue
             filing_date = _parse_date(row.get("filing_date"))
@@ -181,8 +187,10 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
             status=applications[number]["status"],
             family_id=family_ids[number],
             family_resolution=family_resolution[number],
-            generation_eligible=number in response_applications,
+            generation_eligible=inputs.cms_documents is not None and number in response_applications,
             forecast_eligible=True,
+            metadata={"response_observed": number in response_applications,
+                      "requires_document_verification": inputs.cms_documents is None},
         )
         for number in eligible_numbers
     )
@@ -224,6 +232,10 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
                     },
                 )
             )
+    event_descriptions: dict[str, str] = {}
+    if inputs.event_codes is not None:
+        for frame in _iter_table(inputs.event_codes, "event_codes", options.chunksize, mapping):
+            event_descriptions.update(zip(frame["event_code"], frame["description"]))
     normalized_transactions: list[TransactionEvent] = []
     transaction_occurrences: dict[str, int] = {}
     for frame in _iter_table(inputs.transactions, "transactions", options.chunksize, mapping):
@@ -245,7 +257,7 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
                     application_number=application_number,
                     event_code=code,
                     event_date=_parse_date(row.get("event_date")),
-                    description=_optional_string(row.get("event_description")),
+                    description=_optional_string(row.get("event_description")) or event_descriptions.get(code),
                     source_identifier=f"{signature}:{transaction_occurrences[signature]}",
                 )
             )
@@ -270,11 +282,15 @@ def build_manifests(inputs: PatExInputs, options: SampleOptions) -> ManifestBund
 
 
 def _iter_table(
-    path: Path, name: str, chunksize: int, mapping: Mapping[str, Any]
+    path: Path | None, name: str, chunksize: int, mapping: Mapping[str, Any]
 ) -> Iterable[pd.DataFrame]:
+    if path is None:
+        return
     aliases = mapping["aliases"][name]
     optional = mapping.get("optional_aliases", {}).get(name, {})
-    for chunk in pd.read_csv(path, dtype=str, keep_default_na=False, chunksize=chunksize):
+    columns = pd.read_csv(path, nrows=0).columns
+    selected = list(resolve_columns(columns, {**aliases, **optional}).values())
+    for chunk in pd.read_csv(path, usecols=selected, dtype=str, keep_default_na=False, chunksize=chunksize):
         resolved = resolve_columns(chunk.columns, aliases)
         optional_resolved = resolve_columns(chunk.columns, optional)
         renamed = chunk.rename(

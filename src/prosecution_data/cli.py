@@ -60,8 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_patex_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--application-data", type=Path, required=True)
     parser.add_argument("--transactions", type=Path, required=True)
-    parser.add_argument("--cms-documents", type=Path, required=True)
-    parser.add_argument("--cms-document-codes", type=Path, required=True)
+    parser.add_argument("--cms-documents", type=Path)
+    parser.add_argument("--cms-document-codes", type=Path)
+    parser.add_argument("--event-codes", type=Path)
     parser.add_argument("--continuity-parents", type=Path)
     parser.add_argument("--continuity-children", type=Path)
     parser.add_argument("--sample-size", type=int)
@@ -117,6 +118,7 @@ def _run_sample(args: argparse.Namespace, config: AppConfig) -> None:
     inputs = PatExInputs(
         application_data=args.application_data,
         transactions=args.transactions,
+        event_codes=args.event_codes,
         cms_documents=args.cms_documents,
         cms_document_codes=args.cms_document_codes,
         continuity_parents=args.continuity_parents,

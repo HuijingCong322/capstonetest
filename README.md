@@ -22,8 +22,8 @@ Download and unpack the PatEx CSV distribution yourself. The pipeline expects:
 
 - `application_data.csv`
 - `transactions.csv`
-- `cms_documents.csv`
-- `cms_document_codes.csv`
+- `event_codes.csv` (recommended for transaction descriptions)
+- optionally `cms_documents.csv` and `cms_document_codes.csv` together
 - optionally `continuity_parents.csv` and `continuity_children.csv`
 
 Official sources:
@@ -116,3 +116,41 @@ JSONL is the canonical nested research output. Parquet is a flattened analysis p
 - Missing documents, unknown values, not-applicable fields, and observed absence are kept distinct.
 - Pending cases without an observed follow-up are treated as censored rather than negative outcomes.
 - Review USPTO access and redistribution terms before releasing source documents.
+
+## PatEx 2022 metadata-only pilot
+
+For the five downloaded CSV files, CMS files are not required:
+
+```bash
+cd /Users/c/Desktop/capstone
+export PYTHONPATH="$PWD/src"
+.venv/bin/python .venv/bin/prosecution-data --output-root data/patex_2022/pilot sample \
+  --application-data data/patex_2022/raw_csv/application_data.csv \
+  --transactions data/patex_2022/raw_csv/transactions.csv \
+  --event-codes data/patex_2022/raw_csv/event_codes.csv \
+  --continuity-parents data/patex_2022/raw_csv/continuity_parents.csv \
+  --continuity-children data/patex_2022/raw_csv/continuity_children.csv \
+  --date-from 2008-01-01 --date-to 2015-12-31 --sample-size 50 --seed 42
+.venv/bin/python .venv/bin/prosecution-data --output-root data/patex_2022/pilot build-timeline
+```
+
+This scans large CSVs in chunks and selects only required columns. It can take
+substantial time; it is not a three-record smoke test. Public-record candidates
+are inferred from publication or patent identifiers when public_indicator is
+absent. This is a discovery filter, not proof of public document availability.
+The current sampling command does not enforce utility type or technology-center
+strata; confirm these before adopting its output as the shared evaluation sample.
+
+Transaction codes preserve punctuation: MN/=. is the mailed allowance notice;
+MCTNF/MCTFR are mailing events; A... and A/RR are response candidates. Legacy
+aliases remain for compatibility with existing inputs. Transactions remain
+separate from document codes and are not deduplicated into verified OA rounds.
+
+Metadata-only output contains no fabricated PDF document entries and is not
+eligible for generation. response_observed flags candidate reply events, while
+requires_document_verification marks records needing ODP/source review. Timelines
+are chronological candidates, not labels.csv or validated t=1 labels. Review
+same-day order, reply completeness, duplicate processing/mailing events, and
+snapshot dates with A before scoring. The default timeline window is 365 days;
+absence of a link is not proof of a negative outcome. RCE/appeal events stop a
+candidate next-event link rather than being skipped to a later OA.
