@@ -1,0 +1,15 @@
+output_root = "../data"
+sample_size = 100
+random_seed = 42
+
+odp_base_url = "https://api.uspto.gov"
+timeout_seconds = 30
+max_retries = 4
+requests_per_minute = 30
+fail_fast = false
+
+min_native_characters = 80
+min_printable_ratio = 0.85
+
+# Secrets are intentionally unsupported here.
+# Set USPTO_API_KEY in the environment for live ODP acquisition.

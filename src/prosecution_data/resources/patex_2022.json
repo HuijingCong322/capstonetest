@@ -1,0 +1,164 @@
+{
+  "aliases": {
+    "application_data": {
+      "application_number": [
+        "application_number",
+        "appl_id"
+      ],
+      "filing_date": [
+        "filing_date"
+      ],
+      "status": [
+        "status",
+        "appl_status_desc"
+      ]
+    },
+    "transactions": {
+      "application_number": [
+        "application_number",
+        "appl_id"
+      ],
+      "event_code": [
+        "event_code"
+      ],
+      "event_date": [
+        "recorded_date",
+        "event_date"
+      ]
+    },
+    "cms_documents": {
+      "application_number": [
+        "application_number",
+        "appl_id"
+      ],
+      "document_code": [
+        "document_code"
+      ],
+      "document_date": [
+        "mailroom_date",
+        "document_date",
+        "document_filing_date"
+      ]
+    },
+    "cms_document_codes": {
+      "document_code": [
+        "document_code"
+      ],
+      "document_description": [
+        "document_description"
+      ]
+    },
+    "continuity_parents": {
+      "application_number": [
+        "application_number",
+        "appl_id"
+      ],
+      "parent_application_number": [
+        "parent_application_number",
+        "parent_appl_id"
+      ]
+    },
+    "continuity_children": {
+      "application_number": [
+        "application_number",
+        "appl_id"
+      ],
+      "child_application_number": [
+        "child_application_number",
+        "child_appl_id"
+      ]
+    },
+    "event_codes": {
+      "event_code": [
+        "event_code"
+      ],
+      "description": [
+        "description"
+      ]
+    }
+  },
+  "optional_aliases": {
+    "transactions": {
+      "event_description": [
+        "event_description"
+      ]
+    },
+    "cms_documents": {
+      "document_id": [
+        "document_id",
+        "document_identifier"
+      ],
+      "number_of_pages": [
+        "number_of_pages"
+      ]
+    },
+    "application_data": {
+      "public_indicator": [
+        "public_indicator"
+      ],
+      "earliest_pgpub_number": [
+        "earliest_pgpub_number"
+      ],
+      "patent_number": [
+        "patent_number"
+      ]
+    }
+  },
+  "document_categories": {
+    "office_action": [
+      "CTNF",
+      "CTFR"
+    ],
+    "applicant_response": [
+      "RESP",
+      "A.NE",
+      "A.AF",
+      "AMND",
+      "A..."
+    ],
+    "next_examination_event": [
+      "CTNF",
+      "CTFR",
+      "NOA",
+      "ABN"
+    ]
+  },
+  "transaction_categories": {
+    "office_action": [
+      "CTNF",
+      "CTFR",
+      "MCTNF",
+      "MCTFR"
+    ],
+    "applicant_response": [
+      "RESP",
+      "A.NE",
+      "A.AF",
+      "AMND",
+      "A...",
+      "A/RR"
+    ],
+    "next_examination_event": [
+      "NOA",
+      "N/=",
+      "MN/=",
+      "MN/=.",
+      "N/=A",
+      "MCTAV",
+      "CTAV",
+      "CTEQ",
+      "EPQ.",
+      "CTRS"
+    ],
+    "terminal_abandonment": [
+      "ABN",
+      "ABN2",
+      "NABN"
+    ],
+    "procedure_change": [
+      "RCEX",
+      "N/AP",
+      "AP.B"
+    ]
+  }
+}
